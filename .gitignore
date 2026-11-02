@@ -1,0 +1,6 @@
+node_modules/
+.gradle-local/
+.expo/
+dist/
+web-build/
+npm-debug.log*
