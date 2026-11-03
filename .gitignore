@@ -1,5 +1,11 @@
 node_modules/
+.idea/
+.vscode/
+Repositorio de codigo reac native.js
+assets/android-icon-foreground.png
 .gradle-local/
+.cxx/
+.kotlin/
 .expo/
 dist/
 web-build/

@@ -1,11 +1,14 @@
-import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Animated, KeyboardAvoidingView, Linking, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BASES_NOTA, FRACCION_APROBACION_PREDETERMINADA, formatoNumero, normalizarRespaldo, obtenerPromedioActual, obtenerResumenAsignatura, parsearNumero } from './src/domain/grades';
+import { describirLanzamiento, esVersionMasNueva, seleccionarApk } from './src/domain/releases';
 
 const COLORS = {
   background: '#111318',
@@ -27,51 +30,17 @@ const THEME_OPTIONS = [
 const GITHUB_OWNER = 'DammerungEthan';
 const GITHUB_REPOSITORY = 'FocusGrades';
 const APK_ASSET_NAME = 'Focus-Grades.apk';
-const BASES_NOTA = [5, 10, 100];
-const FRACCION_APROBACION_PREDETERMINADA = 0.6;
-const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0';
+const APP_VERSION = Constants.expoConfig?.version ?? '1.0.2';
 const APP_YEAR = new Date().getFullYear();
 const THEME_STORAGE_KEY = 'focus-grades-theme';
 const GRADE_SCALE_STORAGE_KEY = 'focus-grades-scale';
 const PASS_FRACTION_STORAGE_KEY = 'focus-grades-pass-fraction';
 const APP_DATA_STORAGE_KEY = 'focus-grades-data';
 
-const formatoNumero = valor => Number.isInteger(valor) ? String(valor) : valor.toFixed(1);
-
-function esVersionMasNueva(remota, instalada) {
-  const versionRemota = String(remota).replace(/^[vV]/, '').split('.').map(parte => Number.parseInt(parte, 10) || 0);
-  const versionInstalada = String(instalada).replace(/^[vV]/, '').split('.').map(parte => Number.parseInt(parte, 10) || 0);
-  for (let indice = 0; indice < Math.max(versionRemota.length, versionInstalada.length); indice += 1) {
-    if ((versionRemota[indice] || 0) !== (versionInstalada[indice] || 0)) return (versionRemota[indice] || 0) > (versionInstalada[indice] || 0);
-  }
-  return false;
-}
-
-function obtenerPromedioActual(asignatura, notasGuardadas, escala) {
-  const notas = notasGuardadas.filter(item => item.asignatura === asignatura);
-  if (notas.length === 0) return null;
-  const puntos = notas.reduce((total, item) => total + (Number(item.nota.replace(',', '.')) * escala / Number(item.base || escala)) * Number(item.porcentaje.replace(',', '.')), 0);
-  return puntos / 100;
-}
-
-function obtenerResumenAsignatura(asignatura, notasGuardadas, escala, fraccionAprobacion) {
-  const notas = notasGuardadas.filter(item => item.asignatura === asignatura);
-  const peso = notas.reduce((total, item) => total + Number(item.porcentaje.replace(',', '.')), 0);
-  const promedio = obtenerPromedioActual(asignatura, notasGuardadas, escala);
-  const puntos = promedio === null ? 0 : promedio * 100;
-  const restante = Math.max(0, 100 - peso);
-  const notaAprobatoria = escala * fraccionAprobacion;
-
-  if (notas.length === 0) return `Te falta sacar un ${formatoNumero(notaAprobatoria)} en el 100% restante para ganar la materia.`;
-  if (restante === 0) return puntos / 100 >= notaAprobatoria ? 'Ya alcanzas la nota para ganar la materia.' : 'Ya no alcanza el porcentaje restante para ganar la materia.';
-
-  const necesaria = (notaAprobatoria * 100 - puntos) / restante;
-  if (necesaria <= 0) return 'Con lo que llevas ya alcanzas la nota para ganar la materia.';
-  if (necesaria <= escala) return `Te falta sacar un ${formatoNumero(necesaria)} en el ${formatoNumero(restante)}% restante para ganar la materia.`;
-  return `No alcanza el porcentaje restante: necesitarías ${formatoNumero(necesaria)} y la nota máxima es ${formatoNumero(escala)}.`;
-}
-
-export default function Index() {
+function Index() {
+  const insets = useSafeAreaInsets();
+  const [detalleExpandido, setDetalleExpandido] = useState(false);
+  const desplazamientoModal = useRef(new Animated.Value(0)).current;
   const [pestana, setPestana] = useState('asignaturas');
   const [texto, setTexto] = useState('');
   const [asignaturas, setAsignaturas] = useState([]);
@@ -87,6 +56,11 @@ export default function Index() {
   const [notaMinimaTexto, setNotaMinimaTexto] = useState('3');
   const [temaId, setTemaId] = useState('purple');
   const [datosListos, setDatosListos] = useState(false);
+  const [errorCarga, setErrorCarga] = useState(false);
+  const [errorGuardado, setErrorGuardado] = useState(false);
+  const [reintentoGuardado, setReintentoGuardado] = useState(0);
+  const busquedaActualizacionActiva = useRef(false);
+  const colaGuardado = useRef(Promise.resolve());
   const [buscandoActualizacion, setBuscandoActualizacion] = useState(false);
   const [selectorTemaAbierto, setSelectorTemaAbierto] = useState(false);
   const temaActual = THEME_OPTIONS.find(tema => tema.id === temaId) ?? THEME_OPTIONS[0];
@@ -97,7 +71,8 @@ export default function Index() {
       if (mostrarResultado) Alert.alert('Comprobador pendiente', 'Falta conectar el repositorio público de GitHub.');
       return;
     }
-    if (buscandoActualizacion) return;
+    if (busquedaActualizacionActiva.current) return;
+    busquedaActualizacionActiva.current = true;
     setBuscandoActualizacion(true);
     try {
       const respuesta = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } });
@@ -113,15 +88,16 @@ export default function Index() {
         if (mostrarResultado) Alert.alert('Ya tienes la versión más reciente', `Focus Grades ${APP_VERSION} está actualizado.`);
         return;
       }
-      const apk = lanzamiento.assets?.find(archivo => archivo.name === APK_ASSET_NAME) ?? lanzamiento.assets?.find(archivo => archivo.name.toLowerCase().endsWith('.apk'));
+      const apk = seleccionarApk(lanzamiento, APK_ASSET_NAME);
       if (!apk?.browser_download_url) throw new Error(`El lanzamiento ${versionNueva} no contiene el APK.`);
-      Alert.alert(`Focus Grades ${versionNueva}`, 'Hay una nueva versión. Descárgala e instala la actualización para conservar tus datos.', [
+      Alert.alert(`Focus Grades ${versionNueva}`, describirLanzamiento(lanzamiento, apk), [
         { text: 'Más tarde', style: 'cancel' },
         { text: 'Descargar', onPress: () => Linking.openURL(apk.browser_download_url).catch(() => Alert.alert('No se pudo abrir el enlace', 'Revisa tu conexión e inténtalo otra vez.')) },
       ]);
     } catch {
       if (mostrarResultado) Alert.alert('No se pudo comprobar', 'Revisa tu conexión y vuelve a intentarlo.');
     } finally {
+      busquedaActualizacionActiva.current = false;
       setBuscandoActualizacion(false);
     }
   };
@@ -136,25 +112,34 @@ export default function Index() {
       const escala = BASES_NOTA.includes(Number(escalaGuardada)) ? Number(escalaGuardada) : 5;
       const fraccion = Number(fraccionGuardada);
       const fraccionValida = Number.isFinite(fraccion) && fraccion > 0 && fraccion <= 1 ? fraccion : FRACCION_APROBACION_PREDETERMINADA;
+      const datosLocales = datosGuardados ? JSON.parse(datosGuardados) : { asignaturas: [], notasGuardadas: [] };
+      const datosNormalizados = normalizarRespaldo({ app: 'Focus Grades', escala, fraccionAprobacion: fraccionValida, ...datosLocales });
       setBaseNota(escala);
       setFraccionAprobacion(fraccionValida);
       setNotaMinimaTexto(formatoNumero(escala * fraccionValida));
-      if (datosGuardados) {
-        const datos = JSON.parse(datosGuardados);
-        if (Array.isArray(datos.asignaturas)) setAsignaturas([...new Set(datos.asignaturas)]);
-        if (Array.isArray(datos.notasGuardadas)) setNotasGuardadas(datos.notasGuardadas);
-      }
-    }).catch(() => {}).finally(() => setDatosListos(true));
+      setAsignaturas(datosNormalizados.asignaturas);
+      setNotasGuardadas(datosNormalizados.notasGuardadas);
+    }).catch(() => setErrorCarga(true)).finally(() => setDatosListos(true));
   }, []);
 
   useEffect(() => {
-    if (datosListos) {
-      AsyncStorage.setItem(THEME_STORAGE_KEY, temaId).catch(() => {});
-      AsyncStorage.setItem(GRADE_SCALE_STORAGE_KEY, String(baseNota)).catch(() => {});
-      AsyncStorage.setItem(PASS_FRACTION_STORAGE_KEY, String(fraccionAprobacion)).catch(() => {});
-      AsyncStorage.setItem(APP_DATA_STORAGE_KEY, JSON.stringify({ asignaturas, notasGuardadas })).catch(() => {});
-    }
-  }, [temaId, baseNota, fraccionAprobacion, asignaturas, notasGuardadas, datosListos]);
+    if (!datosListos || errorCarga) return undefined;
+    let activo = true;
+    const valores = [
+      [THEME_STORAGE_KEY, temaId],
+      [GRADE_SCALE_STORAGE_KEY, String(baseNota)],
+      [PASS_FRACTION_STORAGE_KEY, String(fraccionAprobacion)],
+      [APP_DATA_STORAGE_KEY, JSON.stringify({ asignaturas, notasGuardadas })],
+    ];
+    const temporizador = setTimeout(() => {
+      colaGuardado.current = colaGuardado.current.catch(() => {}).then(() => AsyncStorage.multiSet(valores)).then(() => {
+        if (activo) setErrorGuardado(false);
+      }).catch(() => {
+        if (activo) setErrorGuardado(true);
+      });
+    }, 350);
+    return () => { activo = false; clearTimeout(temporizador); };
+  }, [temaId, baseNota, fraccionAprobacion, asignaturas, notasGuardadas, datosListos, errorCarga, reintentoGuardado]);
 
   const agregarAsignatura = () => {
     const nombre = texto.trim();
@@ -169,8 +154,8 @@ export default function Index() {
 
   const agregarNota = () => {
     if (!nota.trim() || !porcentaje.trim()) return;
-    const valorNota = Number(nota.trim().replace(',', '.'));
-    const valorPorcentaje = Number(porcentaje.trim().replace(',', '.'));
+    const valorNota = parsearNumero(nota);
+    const valorPorcentaje = parsearNumero(porcentaje);
     if (!Number.isFinite(valorNota) || valorNota < 0 || valorNota > baseNota) {
       Alert.alert('Nota fuera de escala', `Ingresa una nota entre 0 y ${baseNota}.`);
       return;
@@ -179,7 +164,7 @@ export default function Index() {
       Alert.alert('Porcentaje no válido', 'Ingresa un porcentaje mayor que 0 y hasta 100.');
       return;
     }
-    const pesoRegistrado = notasGuardadas.filter(item => item.asignatura === seleccionada && item.id !== edicionNotaId).reduce((total, item) => total + Number(item.porcentaje.replace(',', '.')), 0);
+    const pesoRegistrado = notasGuardadas.filter(item => item.asignatura === seleccionada && item.id !== edicionNotaId).reduce((total, item) => total + parsearNumero(item.porcentaje), 0);
     if (pesoRegistrado + valorPorcentaje > 100) {
       Alert.alert('Porcentaje excedido', `Ya registraste ${formatoNumero(pesoRegistrado)}%. El total de evaluaciones no puede pasar del 100%.`);
       return;
@@ -191,7 +176,7 @@ export default function Index() {
   };
 
   const iniciarEdicion = item => {
-    const notaConvertida = Number(item.nota.replace(',', '.')) * baseNota / Number(item.base || baseNota);
+    const notaConvertida = parsearNumero(item.nota) * baseNota / Number(item.base || baseNota);
     setEdicionNotaId(item.id);
     setNota(String(Number(notaConvertida.toFixed(2))));
     setPorcentaje(item.porcentaje);
@@ -209,6 +194,25 @@ export default function Index() {
     setNuevoNombreAsignatura('');
     setSeleccionada(null);
   };
+
+  const controlVentana = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => true,
+    onMoveShouldSetPanResponder: (_, gesto) => Math.abs(gesto.dy) > 5 && Math.abs(gesto.dy) > Math.abs(gesto.dx),
+    onPanResponderMove: (_, gesto) => desplazamientoModal.setValue(Math.max(0, gesto.dy)),
+    onPanResponderRelease: (_, gesto) => {
+      if (gesto.dy < -45) setDetalleExpandido(true);
+      if (gesto.dy > 110) {
+        if (detalleExpandido) setDetalleExpandido(false);
+        else {
+          Animated.timing(desplazamientoModal, { toValue: 500, duration: 160, useNativeDriver: true }).start(cerrarDetalle);
+          return;
+        }
+      }
+      Animated.spring(desplazamientoModal, { toValue: 0, useNativeDriver: true, speed: 24, bounciness: 4 }).start();
+    },
+    onPanResponderTerminate: () => Animated.spring(desplazamientoModal, { toValue: 0, useNativeDriver: true }).start(),
+  }), [cerrarDetalle, detalleExpandido, desplazamientoModal]);
 
   const guardarNombreAsignatura = () => {
     const nombreNuevo = nuevoNombreAsignatura.trim();
@@ -247,7 +251,7 @@ export default function Index() {
 
   const exportarRespaldo = async () => {
     try {
-      const contenido = JSON.stringify({ app: 'Focus Grades', exportado: new Date().toISOString(), escala: baseNota, fraccionAprobacion, asignaturas, notasGuardadas }, null, 2);
+      const contenido = JSON.stringify({ app: 'Focus Grades', schemaVersion: 1, exportado: new Date().toISOString(), escala: baseNota, fraccionAprobacion, asignaturas, notasGuardadas }, null, 2);
       const archivo = `${FileSystem.cacheDirectory}focus-grades-respaldo-${Date.now()}.json`;
       await FileSystem.writeAsStringAsync(archivo, contenido, { encoding: FileSystem.EncodingType.UTF8 });
       if (!(await Sharing.isAvailableAsync())) {
@@ -266,14 +270,13 @@ export default function Index() {
   };
 
   const guardarNotaMinima = () => {
-    const valor = Number(notaMinimaTexto.trim().replace(',', '.'));
+    const valor = parsearNumero(notaMinimaTexto);
     if (!Number.isFinite(valor) || valor <= 0 || valor > baseNota) {
       Alert.alert('Nota mínima no válida', `Escribe una nota mayor que 0 y hasta ${baseNota}.`);
       return;
     }
     const fraccion = valor / baseNota;
     setFraccionAprobacion(fraccion);
-    setNotaMinimaTexto(formatoNumero(valor));
     Alert.alert('Configuración guardada', `Se aprobará con ${formatoNumero(valor)} sobre ${baseNota}.`);
   };
 
@@ -282,40 +285,33 @@ export default function Index() {
       const seleccionArchivo = await DocumentPicker.getDocumentAsync({ type: ['application/json', 'text/json'], copyToCacheDirectory: true });
       if (seleccionArchivo.canceled) return;
       const textoArchivo = await FileSystem.readAsStringAsync(seleccionArchivo.assets[0].uri);
-      const respaldo = JSON.parse(textoArchivo);
-      const escala = Number(respaldo.escala);
-      const fraccion = Number(respaldo.fraccionAprobacion ?? FRACCION_APROBACION_PREDETERMINADA);
-      const materias = Array.isArray(respaldo.asignaturas) ? [...new Set(respaldo.asignaturas.filter(nombre => typeof nombre === 'string' && nombre.trim()))] : [];
-      const notas = Array.isArray(respaldo.notasGuardadas) ? respaldo.notasGuardadas : [];
-      const estructuraValida = respaldo.app === 'Focus Grades' && BASES_NOTA.includes(escala) && Number.isFinite(fraccion) && fraccion > 0 && fraccion <= 1 && Array.isArray(respaldo.asignaturas) && materias.length === respaldo.asignaturas.length && notas.every(item => item && typeof item.asignatura === 'string' && materias.includes(item.asignatura) && Number.isFinite(Number(item.nota)) && Number.isFinite(Number(item.porcentaje)) && Number(item.porcentaje) > 0 && Number.isFinite(Number(item.base || escala)) && Number(item.base || escala) > 0 && Number(item.nota) >= 0 && Number(item.nota) <= Number(item.base || escala));
-      const pesosPorMateria = notas.reduce((acumulados, item) => ({ ...acumulados, [item.asignatura]: (acumulados[item.asignatura] || 0) + Number(item.porcentaje) }), {});
-      if (!estructuraValida || Object.values(pesosPorMateria).some(peso => peso > 100)) {
-        Alert.alert('Respaldo no válido', 'El archivo no parece ser una copia compatible de Focus Grades.');
-        return;
-      }
+      const respaldo = normalizarRespaldo(JSON.parse(textoArchivo));
       Alert.alert('Restaurar copia', 'Esto reemplazará las asignaturas, notas y configuración actuales de este dispositivo.', [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Restaurar', style: 'destructive', onPress: () => {
-          setAsignaturas(materias);
-          setNotasGuardadas(notas);
-          setBaseNota(escala);
-          setFraccionAprobacion(fraccion);
-          setNotaMinimaTexto(formatoNumero(escala * fraccion));
+          setAsignaturas(respaldo.asignaturas);
+          setNotasGuardadas(respaldo.notasGuardadas);
+          setBaseNota(respaldo.escala);
+          setFraccionAprobacion(respaldo.fraccionAprobacion);
+          setNotaMinimaTexto(formatoNumero(respaldo.escala * respaldo.fraccionAprobacion));
+          setErrorCarga(false);
           cerrarDetalle();
           Alert.alert('Copia restaurada', 'Tus asignaturas y notas ya están disponibles.');
         } },
       ]);
-    } catch {
-      Alert.alert('No se pudo restaurar', 'El archivo no se pudo abrir. Selecciona una copia JSON válida de Focus Grades.');
+    } catch (error) {
+      Alert.alert('No se pudo restaurar', error instanceof Error ? error.message : 'El archivo no se pudo abrir. Selecciona una copia JSON válida de Focus Grades.');
     }
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <View style={styles.header}>
         <View style={styles.brandMark}><Text style={styles.brandMarkText}>FG</Text></View>
         <View><Text style={styles.nombreApp}>FOCUS GRADES</Text><Text style={styles.brandCaption}>CONTROL DE NOTAS</Text></View>
       </View>
+      {errorCarga ? <View accessibilityRole="alert" style={styles.storageWarning}><Text style={styles.storageWarningText}>No pude leer los datos guardados. Para evitar sobrescribirlos, los cambios nuevos no se guardarán. Restaura una copia desde Configuración.</Text><Pressable onPress={() => setPestana('configuracion')} accessibilityRole="button"><Text style={styles.storageRetryText}>Abrir copias de seguridad</Text></Pressable></View> : null}
+      {errorGuardado ? <View accessibilityRole="alert" style={styles.storageWarning}><Text style={styles.storageWarningText}>No se pudieron guardar los últimos cambios. Revisa el espacio disponible.</Text><Pressable onPress={() => setReintentoGuardado(numero => numero + 1)} accessibilityRole="button"><Text style={styles.storageRetryText}>Reintentar guardado</Text></Pressable></View> : null}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.screenContent}>
         {pestana === 'asignaturas' ? (
@@ -328,8 +324,8 @@ export default function Index() {
             <View style={styles.formCard}>
               <Text style={styles.sectionEyebrow}>NUEVA ASIGNATURA</Text>
               <View style={styles.inputRow}>
-                <TextInput value={texto} onChangeText={setTexto} onSubmitEditing={agregarAsignatura} returnKeyType="done" placeholder="Escribe el nombre" placeholderTextColor={COLORS.muted} style={styles.campo} />
-                <Pressable onPress={agregarAsignatura} style={({ pressed }) => [styles.botonAgregar, pressed && styles.pressed]}><Text style={styles.textoBoton}>+</Text></Pressable>
+                <TextInput value={texto} onChangeText={setTexto} onSubmitEditing={agregarAsignatura} returnKeyType="done" accessibilityLabel="Nombre de la nueva asignatura" placeholder="Escribe el nombre" placeholderTextColor={COLORS.muted} style={styles.campo} />
+                <Pressable onPress={agregarAsignatura} accessibilityRole="button" accessibilityLabel="Agregar asignatura" style={({ pressed }) => [styles.botonAgregar, pressed && styles.pressed]}><Text style={styles.textoBoton}>+</Text></Pressable>
               </View>
             </View>
 
@@ -341,17 +337,18 @@ export default function Index() {
               <View key={`${asignatura}-${indice}`} style={styles.elementoLista}>
                 <View style={styles.subjectIcon}><Text style={styles.subjectIconText}>{asignatura.charAt(0).toUpperCase()}</Text></View>
                 <View style={styles.subjectCopy}><Text style={styles.textoAsignatura}>{asignatura}</Text><Text style={styles.subjectDetail}>{obtenerResumenAsignatura(asignatura, notasGuardadas, baseNota, fraccionAprobacion)}</Text></View>
-                <Pressable onPress={() => setSeleccionada(asignatura)} style={({ pressed }) => [styles.elementoCaja, pressed && styles.pressed]}><Text style={styles.infoButtonText}>Ver</Text></Pressable>
+                <Pressable onPress={() => setSeleccionada(asignatura)} accessibilityRole="button" accessibilityLabel={`Ver detalles de ${asignatura}`} style={({ pressed }) => [styles.elementoCaja, pressed && styles.pressed]}><Text style={styles.infoButtonText}>Ver</Text></Pressable>
               </View>
             ))}
           </>
         ) : pestana === 'estadisticas' ? (
           <>
-            <View style={styles.greeting}><Text style={styles.title}>Estadísticas</Text><Text style={styles.subtitle}>Promedio ponderado actual por asignatura.</Text></View>
+            <View style={styles.greeting}><Text style={styles.title}>Estadísticas</Text><Text style={styles.subtitle}>Aporte acumulado de tus notas a la materia.</Text></View>
+            <View style={styles.calculationHint}><Text style={styles.calculationHintTitle}>Cómo leer el promedio</Text><Text style={styles.calculationHintText}>La barra muestra cuánto aportan tus notas al total de la materia. Por ejemplo, una nota máxima en el 10% aporta el 10% de la escala; el porcentaje no se trata como si ya hubieras evaluado el 100%.</Text></View>
             {asignaturas.length === 0 ? <View style={styles.emptyCard}><Text style={styles.emptyTitle}>Todavía no hay asignaturas</Text><Text style={styles.emptySubtitle}>Cuando registres notas, verás aquí tus promedios.</Text></View> : asignaturas.map((asignatura, indice) => {
               const promedio = obtenerPromedioActual(asignatura, notasGuardadas, baseNota);
               const porcentajeBarra = promedio === null ? 0 : Math.max(0, Math.min(100, promedio / baseNota * 100));
-              const pesoEvaluado = notasGuardadas.filter(item => item.asignatura === asignatura).reduce((total, item) => total + Number(item.porcentaje.replace(',', '.')), 0);
+              const pesoEvaluado = notasGuardadas.filter(item => item.asignatura === asignatura).reduce((total, item) => total + parsearNumero(item.porcentaje), 0);
               return <View key={`${asignatura}-${indice}`} style={styles.statCard}><View style={styles.statHeader}><Text style={styles.statName}>{asignatura}</Text><Text style={styles.statAverage}>{promedio === null ? '—' : `${formatoNumero(promedio)} / ${baseNota}`}</Text></View><View style={styles.chartTrack}><View style={[styles.chartFill, { width: `${porcentajeBarra}%` }]} /></View><Text style={styles.statCaption}>{promedio === null ? 'Sin notas registradas' : `Nota acumulada sobre el 100% · ${formatoNumero(pesoEvaluado)}% evaluado`}</Text></View>;
             })}
           </>
@@ -388,6 +385,9 @@ export default function Index() {
               <View style={styles.appDetailRow}><Text style={styles.appDetailLabel}>Año</Text><Text style={styles.appDetailValue}>{APP_YEAR}</Text></View>
               <View style={styles.appDetailRow}><Text style={styles.appDetailLabel}>Contenido</Text><Text style={styles.appDetailValue}>Asignaturas, notas y porcentajes</Text></View>
               <View style={styles.appDetailRow}><Text style={styles.appDetailLabel}>Costo</Text><Text style={styles.appDetailValue}>Gratis</Text></View>
+              <View style={styles.appDetailRow}><Text style={styles.appDetailLabel}>Licencia</Text><Text style={styles.appDetailValue}>MIT</Text></View>
+              <View style={styles.appDetailRow}><Text style={styles.appDetailLabel}>Creador</Text><Text style={styles.appDetailValue}>DammerungEthan</Text></View>
+              <Pressable onPress={() => Linking.openURL('https://github.com/DammerungEthan/FocusGrades')} accessibilityRole="link" style={styles.githubLink}><Text style={styles.githubLinkText}>Código fuente en GitHub ↗</Text></Pressable>
               <View style={styles.appDetailRow}><Text style={styles.appDetailLabel}>Guardado</Text><Text style={styles.appDetailValue}>En este dispositivo</Text></View>
               <Text style={styles.infoText}>Focus Grades te ayuda a organizar tus calificaciones de forma sencilla.</Text>
               <Text style={styles.appCopyright}>© {APP_YEAR} Focus Grades · Controla tu progreso</Text>
@@ -410,19 +410,21 @@ export default function Index() {
         </Pressable>
       </View>
 
-      <Modal visible={seleccionada !== null} transparent animationType="slide" onRequestClose={cerrarDetalle}>
+      <Modal visible={seleccionada !== null} transparent animationType="slide" onShow={() => { setDetalleExpandido(false); desplazamientoModal.setValue(0); }} onRequestClose={cerrarDetalle} statusBarTranslucent navigationBarTranslucent>
+        <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={styles.fondoModal}>
-          <View style={styles.contenidoModal}>
-            <View style={styles.modalHandle} />
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScroll}>
+          <View {...controlVentana.panHandlers} style={StyleSheet.absoluteFillObject} />
+          <Animated.View style={[styles.contenidoModal, { maxHeight: detalleExpandido ? '100%' : '92%', paddingBottom: Math.max(insets.bottom, 16), transform: [{ translateY: desplazamientoModal }] }]}>
+            <View {...controlVentana.panHandlers} accessibilityRole="adjustable" accessibilityLabel="Arrastra hacia arriba para expandir o hacia abajo para cerrar" style={styles.modalHandleArea}><View style={styles.modalHandle} /></View>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalScroll}>
               <Text style={styles.sectionEyebrow}>DETALLE DE ASIGNATURA</Text>
               <Text style={styles.modalTitle}>{seleccionada}</Text>
               {edicionAsignatura ? <View style={styles.renameBox}><TextInput value={nuevoNombreAsignatura} onChangeText={setNuevoNombreAsignatura} autoFocus placeholder="Nombre de la asignatura" placeholderTextColor={COLORS.muted} style={styles.renameInput} /><View style={styles.renameActions}><Pressable onPress={guardarNombreAsignatura} style={styles.renameSaveButton}><Text style={styles.renameSaveText}>Guardar nombre</Text></Pressable><Pressable onPress={() => setEdicionAsignatura(false)} style={styles.renameCancelButton}><Text style={styles.renameCancelText}>Cancelar</Text></Pressable></View></View> : <Pressable onPress={() => { setNuevoNombreAsignatura(seleccionada); setEdicionAsignatura(true); }} style={styles.renameOpenButton}><Text style={styles.renameOpenText}>Editar nombre</Text></Pressable>}
               <View style={styles.formCard}>
                 <Text style={styles.sectionEyebrow}>{edicionNotaId ? 'EDITA LA EVALUACIÓN' : 'REGISTRA UNA EVALUACIÓN'}</Text>
                 <View style={styles.filaCampos}>
-                  <TextInput value={nota} onChangeText={setNota} keyboardType="decimal-pad" style={styles.campoNota} placeholder={`Nota (0–${baseNota})`} placeholderTextColor={COLORS.muted} />
-                  <TextInput value={porcentaje} onChangeText={setPorcentaje} keyboardType="decimal-pad" style={styles.campoPorcentaje} placeholder="Peso (%)" placeholderTextColor={COLORS.muted} />
+                  <TextInput value={nota} onChangeText={setNota} keyboardType="decimal-pad" accessibilityLabel={`Nota en escala de 0 a ${baseNota}`} style={styles.campoNota} placeholder={`Nota (0–${baseNota})`} placeholderTextColor={COLORS.muted} />
+                  <TextInput value={porcentaje} onChangeText={setPorcentaje} keyboardType="decimal-pad" accessibilityLabel="Porcentaje de la evaluación" style={styles.campoPorcentaje} placeholder="Peso (%)" placeholderTextColor={COLORS.muted} />
                   <Pressable onPress={agregarNota} accessibilityRole="button" accessibilityLabel={edicionNotaId ? 'Guardar cambios de la nota' : 'Agregar nota'} style={({ pressed }) => [styles.botonAgregar, styles.notaAddButton, pressed && styles.pressed]}><Text style={styles.textoBoton}>{edicionNotaId ? '✓' : '+'}</Text></Pressable>
                 </View>
                 {edicionNotaId ? <Pressable onPress={cancelarEdicion} style={styles.cancelEditButton}><Text style={styles.cancelEditText}>Cancelar edición</Text></Pressable> : null}
@@ -436,8 +438,9 @@ export default function Index() {
               <Pressable onPress={confirmarEliminarAsignatura} style={({ pressed }) => [styles.deleteSubjectButton, pressed && styles.pressed]}><Text style={styles.deleteSubjectText}>Eliminar asignatura y sus notas</Text></Pressable>
               <Pressable onPress={cerrarDetalle} style={styles.closeButton}><Text style={styles.closeButtonText}>Cerrar</Text></Pressable>
             </ScrollView>
-          </View>
+          </Animated.View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <StatusBar style="light" />
@@ -448,7 +451,10 @@ export default function Index() {
 function createStyles(theme) {
 return StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingTop: 44, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  storageWarning: { marginHorizontal: 16, marginTop: 10, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#845c32', backgroundColor: '#34281d' },
+  storageWarningText: { color: '#ffdfb0', fontSize: 11, lineHeight: 16 },
+  storageRetryText: { color: '#ffd08a', fontSize: 11, fontWeight: '800', marginTop: 8 },
   brandMark: { width: 38, height: 38, borderRadius: 12, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center' },
   brandMarkText: { color: COLORS.background, fontSize: 14, fontWeight: '900', letterSpacing: -1 },
   nombreApp: { color: COLORS.text, fontSize: 12, fontWeight: '900', letterSpacing: 1.1 },
@@ -489,6 +495,8 @@ return StyleSheet.create({
   appDetailRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   appDetailLabel: { color: COLORS.muted, fontSize: 10, fontWeight: '700' },
   appDetailValue: { flexShrink: 1, color: COLORS.text, fontSize: 10, fontWeight: '800', textAlign: 'right' },
+  githubLink: { alignSelf: 'flex-start', paddingVertical: 8 },
+  githubLinkText: { color: '#8daaff', fontSize: 11, fontWeight: '800' },
   infoText: { color: COLORS.muted, fontSize: 10, lineHeight: 16, marginTop: 10 },
   appCopyright: { color: COLORS.muted, fontSize: 9, marginTop: 10 },
   bottomNav: { minHeight: 64, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', paddingHorizontal: 12, borderTopWidth: 1, borderTopColor: COLORS.border, backgroundColor: COLORS.background },
@@ -498,9 +506,11 @@ return StyleSheet.create({
   navLabel: { color: COLORS.muted, fontSize: 9, fontWeight: '700' },
   navLabelActive: { color: theme.accent },
   fondoModal: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.72)' },
+  modalKeyboard: { flex: 1 },
   contenidoModal: { width: '100%', maxHeight: '92%', paddingTop: 11, backgroundColor: COLORS.background, borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTopWidth: 1, borderColor: COLORS.border },
   modalScroll: { paddingHorizontal: 20, paddingBottom: 30 },
-  modalHandle: { width: 38, height: 4, alignSelf: 'center', marginTop: 11, marginBottom: 18, borderRadius: 2, backgroundColor: COLORS.border },
+  modalHandleArea: { width: '100%', height: 34, alignItems: 'center', justifyContent: 'center' },
+  modalHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: '#626a7a' },
   modalTitle: { color: COLORS.text, fontSize: 21, fontWeight: '900', marginBottom: 18 },
   filaCampos: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 5 },
   campoNota: { flex: 1, minWidth: 0, height: 44, color: COLORS.text, backgroundColor: COLORS.panel2, borderWidth: 1, borderColor: COLORS.border, borderRadius: 11, paddingHorizontal: 9, fontSize: 11 },
@@ -553,6 +563,9 @@ return StyleSheet.create({
   chartTrack: { height: 9, overflow: 'hidden', marginTop: 13, borderRadius: 5, backgroundColor: COLORS.panel2 },
   chartFill: { height: '100%', borderRadius: 5, backgroundColor: theme.accent },
   statCaption: { color: COLORS.muted, fontSize: 10, marginTop: 8 },
+  calculationHint: { marginBottom: 14, padding: 13, borderRadius: 13, backgroundColor: COLORS.panel, borderWidth: 1, borderColor: COLORS.border },
+  calculationHintTitle: { color: COLORS.text, fontSize: 11, fontWeight: '800', marginBottom: 5 },
+  calculationHintText: { color: COLORS.muted, fontSize: 10, lineHeight: 15 },
   backupCard: { marginTop: 14, padding: 15, borderRadius: 16, backgroundColor: COLORS.panel, borderWidth: 1, borderColor: COLORS.border },
   updateCard: { marginTop: 14, padding: 15, borderRadius: 16, backgroundColor: COLORS.panel, borderWidth: 1, borderColor: COLORS.border },
   updateButton: { alignItems: 'center', justifyContent: 'center', minHeight: 43, marginTop: 13, paddingHorizontal: 12, borderRadius: 11, backgroundColor: theme.accent },
@@ -578,4 +591,8 @@ return StyleSheet.create({
   deleteSubjectButton: { alignItems: 'center', paddingVertical: 12, marginTop: 14, borderRadius: 11, borderWidth: 1, borderColor: '#613440', backgroundColor: '#2c1c23' },
   deleteSubjectText: { color: '#ff9aaa', fontSize: 11, fontWeight: '800' },
 });
+}
+
+export default function App() {
+  return <SafeAreaProvider><Index /></SafeAreaProvider>;
 }
