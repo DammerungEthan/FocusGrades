@@ -1,11 +1,23 @@
-export function esVersionMasNueva(remota, instalada) {
-  const convertir = version => String(version).replace(/^[vV]/, '').split('.').map(parte => Number.parseInt(parte, 10) || 0);
-  const nueva = convertir(remota);
-  const actual = convertir(instalada);
-  for (let indice = 0; indice < Math.max(nueva.length, actual.length); indice += 1) {
-    if ((nueva[indice] || 0) !== (actual[indice] || 0)) return (nueva[indice] || 0) > (actual[indice] || 0);
+function analizarVersion(version) {
+  const coincidencia = String(version).trim().match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
+  return coincidencia ? { numeros: coincidencia.slice(1, 4).map(Number), previa: coincidencia[4] || null } : null;
+}
+
+export function compararVersiones(izquierda, derecha) {
+  const a = analizarVersion(izquierda);
+  const b = analizarVersion(derecha);
+  if (!a || !b) return 0;
+  for (let indice = 0; indice < 3; indice += 1) {
+    if (a.numeros[indice] !== b.numeros[indice]) return a.numeros[indice] > b.numeros[indice] ? 1 : -1;
   }
-  return false;
+  if (a.previa === b.previa) return 0;
+  if (a.previa === null) return 1;
+  if (b.previa === null) return -1;
+  return a.previa.localeCompare(b.previa, undefined, { numeric: true });
+}
+
+export function esVersionMasNueva(remota, instalada) {
+  return compararVersiones(remota, instalada) > 0;
 }
 
 export function seleccionarApk(lanzamiento, nombreEstable) {

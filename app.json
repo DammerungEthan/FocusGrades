@@ -2,13 +2,13 @@
   "expo": {
     "name": "FOCUS GRADES",
     "slug": "focus-grades",
-    "version": "1.0.2",
+    "version": "2.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "icon": "./assets/focus-grades-icon.png",
+    "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.dammerungethan.focusgrades",
-      "versionCode": 3,
+      "versionCode": 4,
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
@@ -16,8 +16,8 @@
         "android.permission.VIBRATE"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#06184D",
-        "foregroundImage": "./assets/icon.png"
+        "backgroundColor": "#F4F1FF",
+        "foregroundImage": "./assets/focus-grades-icon.png"
       }
     },
     "web": {

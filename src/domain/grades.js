@@ -8,8 +8,11 @@ export function parsearNumero(valor) {
   return Number.isFinite(numero) ? numero : Number.NaN;
 }
 
-export function formatoNumero(valor) {
-  return Number.isInteger(valor) ? String(valor) : valor.toFixed(1);
+export function formatoNumero(valor, decimales = 1) {
+  const numero = parsearNumero(valor);
+  if (!Number.isFinite(numero)) return '—';
+  const redondeado = Number(numero.toFixed(decimales));
+  return Number.isInteger(redondeado) ? String(redondeado) : String(redondeado).replace('.', ',');
 }
 
 export function obtenerPromedioActual(asignatura, notasGuardadas, escala) {
@@ -24,21 +27,32 @@ export function obtenerPromedioActual(asignatura, notasGuardadas, escala) {
   return puntos / 100;
 }
 
-export function obtenerResumenAsignatura(asignatura, notasGuardadas, escala, fraccionAprobacion) {
+export function obtenerResumenAsignatura(asignatura, notasGuardadas, escala, fraccionAprobacion, decimales = 1) {
+  const estado = obtenerEstadoAsignatura(asignatura, notasGuardadas, escala, fraccionAprobacion);
+  if (estado.tipo === 'sin_notas') return `Te falta sacar un ${formatoNumero(estado.notaNecesaria, decimales)} en el 100% restante para ganar la materia.`;
+  if (estado.tipo === 'aprobada') return 'Materia aprobada. Ya completaste el 100% de las evaluaciones.';
+  if (estado.tipo === 'meta_alcanzada') return `Ya alcanzaste la nota mínima. Queda un ${formatoNumero(estado.pendiente, decimales)}% por evaluar.`;
+  if (estado.tipo === 'no_alcanza' && estado.pendiente === 0) return 'Completaste todas las evaluaciones, pero no alcanzaste la nota mínima para aprobar.';
+  if (estado.tipo === 'no_alcanza') return `No alcanza el porcentaje restante: necesitarías ${formatoNumero(estado.notaNecesaria, decimales)} y la nota máxima es ${formatoNumero(escala, decimales)}.`;
+  return `Te falta sacar un ${formatoNumero(estado.notaNecesaria, decimales)} en el ${formatoNumero(estado.pendiente, decimales)}% restante para ganar la materia.`;
+}
+
+export function obtenerEstadoAsignatura(asignatura, notasGuardadas, escala, fraccionAprobacion) {
   const notas = notasGuardadas.filter(item => item.asignatura === asignatura);
   const peso = notas.reduce((total, item) => total + parsearNumero(item.porcentaje), 0);
   const promedio = obtenerPromedioActual(asignatura, notasGuardadas, escala);
   const puntos = promedio === null ? 0 : promedio * 100;
   const restante = Math.max(0, 100 - peso);
   const notaAprobatoria = escala * fraccionAprobacion;
-
-  if (notas.length === 0) return `Te falta sacar un ${formatoNumero(notaAprobatoria)} en el 100% restante para ganar la materia.`;
-  if (restante === 0) return puntos / 100 >= notaAprobatoria ? 'Ya alcanzas la nota para ganar la materia.' : 'Ya no alcanza el porcentaje restante para ganar la materia.';
-
-  const necesaria = (notaAprobatoria * 100 - puntos) / restante;
-  if (necesaria <= 0) return 'Con lo que llevas ya alcanzas la nota para ganar la materia.';
-  if (necesaria <= escala) return `Te falta sacar un ${formatoNumero(necesaria)} en el ${formatoNumero(restante)}% restante para ganar la materia.`;
-  return `No alcanza el porcentaje restante: necesitarías ${formatoNumero(necesaria)} y la nota máxima es ${formatoNumero(escala)}.`;
+  const necesariaCalculada = restante > 0 ? (notaAprobatoria * 100 - puntos) / restante : Number.POSITIVE_INFINITY;
+  const necesaria = notas.length === 0 ? notaAprobatoria : necesariaCalculada <= 1e-9 ? 0 : restante > 0 ? necesariaCalculada : puntos + 1e-8 >= notaAprobatoria * 100 ? 0 : Number.POSITIVE_INFINITY;
+  let tipo = 'alcanzable';
+  if (notas.length === 0) tipo = 'sin_notas';
+  else if (restante === 0) tipo = puntos + 1e-8 >= notaAprobatoria * 100 ? 'aprobada' : 'no_alcanza';
+  else if (necesaria === 0) tipo = 'meta_alcanzada';
+  else if (necesaria > escala) tipo = 'no_alcanza';
+  const etiquetas = { sin_notas: 'Sin notas', alcanzable: 'Meta alcanzable', meta_alcanzada: 'Meta alcanzada', aprobada: 'Aprobada', no_alcanza: 'No alcanza' };
+  return { tipo, etiqueta: etiquetas[tipo], promedio, evaluado: Math.min(100, peso), pendiente: restante, notaNecesaria: necesaria, notaMinima: notaAprobatoria };
 }
 
 export function normalizarRespaldo(respaldo) {

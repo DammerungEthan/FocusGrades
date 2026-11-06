@@ -1,78 +1,71 @@
 # Focus Grades
 
-Creada por **DammerungEthan** · [Código fuente en GitHub](https://github.com/DammerungEthan/FocusGrades) · Licencia [MIT](LICENSE).
+Focus Grades ayuda a registrar calificaciones por asignatura, ver el promedio acumulado y saber qué nota necesitas para aprobar. También incluye simulaciones, temas claro y oscuro, respaldos, exportación CSV, informes y comprobación de versiones publicadas en GitHub.
 
-Focus Grades es una app móvil para organizar asignaturas, registrar y editar notas, ver el promedio y calcular qué nota se necesita para aprobar. Incluye escalas de calificación configurables, temas de color, estadísticas, copias de seguridad y búsqueda de actualizaciones.
+Creada por **DammerungEthan** · [Código fuente](https://github.com/DammerungEthan/FocusGrades) · Licencia [MIT](LICENSE).
 
 ## Tecnologías
 
-- React Native
-- Expo SDK 58
+- React Native y Expo SDK 58
 - JavaScript
-- AsyncStorage para guardar asignaturas y notas en el dispositivo
+- AsyncStorage para guardar los datos localmente
 
-## Requisitos
+## Preparar y probar
 
-- Node.js y npm
-- Android Studio con Android SDK
-- Expo Go para probar la app desde el teléfono, o un dispositivo Android para instalar el APK
-
-## Preparar el proyecto
-
-Abre una terminal en la carpeta del proyecto y ejecuta:
+Necesitas Node.js y npm. Instala las dependencias desde esta carpeta:
 
 ```sh
 npm install
 ```
 
-## Probar con Expo Go
+Para abrir el proyecto con Expo Go:
 
-1. Instala Expo Go en el teléfono Android.
-2. En la carpeta del proyecto, ejecuta:
+```sh
+npx expo start
+```
 
-   ```sh
-   npx expo start
-   ```
+Escanea el QR desde Expo Go en Android. Si la red local no conecta, prueba `npx expo start --tunnel`. La terminal debe permanecer abierta mientras desarrollas.
 
-3. Escanea el QR desde Expo Go. Para una conexión mediante túnel, usa `npx expo start --tunnel`.
+## Funciones
 
-Mantén la terminal abierta mientras pruebas la app.
+- Registra asignaturas y evaluaciones con su nota y porcentaje.
+- Selecciona una escala de 0–5, 0–10 o 0–100 y configura la nota mínima para aprobar.
+- Consulta en cada materia el promedio acumulado, el porcentaje evaluado y pendiente, la nota que necesitas y el estado de la meta.
+- Simula una evaluación sin guardarla en tus notas reales.
+- Elige tema claro u oscuro, color de acento, precisión decimal y búsqueda automática de actualizaciones.
+- Exporta o restaura un respaldo JSON, comparte las notas como CSV o genera un informe de texto.
+- Agrega materias de demostración o borra los datos con confirmación.
 
-## Compilar el APK localmente
+## Respaldos y migración a v2
 
-El APK se compila en el PC; no usa EAS Build. Con Android Studio y su Android SDK instalados, ejecuta:
+Las materias y notas se guardan en el dispositivo. Antes de desinstalar la versión anterior, abre **Configuración → Copia de seguridad → Exportar JSON** y guarda el archivo fuera del teléfono.
+
+La versión 2.0.0 usa una clave de firma nueva. Android puede impedir instalarla encima de una versión anterior firmada con otra clave. Para migrar, exporta primero el JSON, desinstala la versión antigua si Android lo solicita, instala la v2 y usa **Configuración → Copia de seguridad → Restaurar JSON**. La restauración reemplaza los datos locales actuales.
+
+En las notas del primer Release v2, incluye un aviso visible: “Antes de instalar v2, exporta una copia JSON desde la app anterior. Si Android no permite actualizarla, desinstálala, instala v2 y restaura la copia desde Configuración”.
+
+Las futuras actualizaciones deben conservar el identificador `com.dammerungethan.focusgrades` y firmarse con el mismo keystore de v2. No cambies, regeneres ni compartas ese keystore; conserva una copia segura.
+
+## Compilar APK localmente
+
+La compilación se hace en el PC con Android SDK, Java y las dependencias instaladas. No usa EAS Build. Ejecuta:
 
 ```sh
 npm run build:android:local
 ```
 
-La primera compilación necesita conexión a internet para descargar Gradle y las dependencias de Android. El APK se guarda en `dist/` con el número de versión del proyecto, por ejemplo `dist/Focus-Grades-v1.0.2.apk`. La versión y el código Android deben mantenerse sincronizados en `app.json`, `package.json` y `android/app/build.gradle`.
+La primera compilación puede descargar Gradle y componentes del SDK. El script deja el APK en `dist/Focus-Grades-v2.0.0.apk`. La versión actual es `2.0.0` y el `versionCode` es `4`; ambos deben aumentar en las siguientes versiones.
 
-## Publicar una versión en GitHub
+## Publicar en GitHub
 
-El APK no se pega en el README ni se sube como archivo normal al código del repositorio. La compilación ARM actual pesa aproximadamente 38 MB y GitHub limita a 25 MiB cada archivo que se carga al repositorio desde el navegador. En cambio, cada archivo adjunto a un Release debe pesar menos de 2 GiB ([límites del repositorio](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github), [límites de Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)).
+Sube el código fuente y el README al repositorio. No subas `node_modules/`, `.expo/`, `.gradle-local/`, `dist/`, `android/app/release.keystore` ni `android/keystore.properties`; esos elementos están ignorados por Git.
 
-Primero sube al repositorio el código fuente y el README, sin `node_modules/`, `.expo/`, `.gradle-local/`, `dist/` ni las claves privadas. Después adjunta el APK a una publicación (**Release**):
+Para publicar el APK, crea un **Release** en GitHub con una etiqueta como `v2.0.0`, añade las notas de cambios y adjunta el archivo de `dist/` como binario. La app consulta los Releases públicos, muestra la versión y las notas, y abre la descarga; Android solicita confirmar la instalación. Las actualizaciones conservan los datos mientras se mantengan el mismo paquete y la firma v2.
 
-1. En el repositorio, abre **Releases** y selecciona **Create a new release**.
-2. Usa una etiqueta como `v1.0.2` y escribe el título de la versión.
-3. Arrastra el APK generado desde `dist/` al área de archivos adjuntos del formulario.
-4. Publica el Release.
+## Cambiar la versión
 
-La app consulta las publicaciones de GitHub para encontrar versiones nuevas. El nombre del APK puede incluir la versión; asegúrate de adjuntar un solo APK de esta app a cada Release.
+En cada publicación nueva, aumenta la versión en `app.json`, `package.json`, `package-lock.json` y `android/app/build.gradle`. Aumenta también `versionCode` en `app.json` y `android/app/build.gradle`. Después compila, crea el Release con una etiqueta que coincida y adjunta un único APK.
 
-## Publicar actualizaciones
+## Privacidad de la firma
 
-Para cada nueva versión:
-
-1. Actualiza la versión en `app.json`, `package.json` y `android/app/build.gradle`; aumenta también `versionCode` en ambos archivos Android (`app.json` y `build.gradle`).
-2. Ejecuta `npm run build:android:local` cuando quieras generar el APK.
-3. Crea un Release con una etiqueta que coincida con la versión, por ejemplo `v1.0.3`, y adjunta el APK generado.
-
-Android acepta una actualización sobre la instalación anterior cuando se conserva el mismo identificador de paquete (`com.dammerungethan.focusgrades`) y se firma con la misma clave. Las asignaturas y notas se guardan localmente y no deberían borrarse al actualizar.
-
-## Firma privada de Android
-
-La clave de publicación se guarda localmente en `android/app/release.keystore` y sus datos de acceso en `android/keystore.properties`. **No subas esos archivos a GitHub ni los compartas.** Guarda una copia segura de ambos: sin la clave original no se podrán publicar actualizaciones compatibles con las instalaciones existentes.
-
-Los archivos de compilación, dependencias y APK están excluidos del repositorio mediante `.gitignore`; el APK se adjunta a cada GitHub Release.
+El keystore de publicación se encuentra localmente en `android/app/release.keystore`; su configuración está en `android/keystore.properties`. No compartas ni subas estos archivos. Si cambias sus contraseñas, actualiza la configuración local y conserva el mismo certificado de firma para que Android acepte las actualizaciones futuras.
